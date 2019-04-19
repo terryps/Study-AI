@@ -1,8 +1,8 @@
 from math import *
 import numpy as np
 
-SIZE = 4
-Bingo = 3
+SIZE = 5
+Bingo = 4
 EXPAND_NUM = 30
 
 class Node(object):
@@ -19,45 +19,49 @@ class Node(object):
         
 
 class State(object):
+    """
+    player: current state player
+    N : visit count for state
+    W : win count for state
+    """
     def __init__(self, board=None, player=0, N=0, W=0):
         self.board = board
         self.player = player
         self.N = N
         self.W = W
         
-    def getPossibleStates(self):
-        opponent = 3 - self.player
-        lst = []
+    def __get_possible_states__(self):
+        """
+        get all possible next states from current state 
+        """
+        next_states = []
         for r in range(SIZE):
             for c in range(SIZE):
                 if self.board[r][c] == 0:
-                    nextBoard = list(map(list, self.board))
-                    nextBoard[r][c] = opponent
-                    lst.append(State(nextBoard, opponent))
-        return lst
+                    next_states.append(self.__move__((r,c)))
+        return next_states
     
-    def randomPlay(self):
+    def __rollout__(self):
         """
-        return next random state
+        return random next state
         """
-        opponent = 3 - self.player
-        empty = [(r,c) if self.board[r][c]==0 else None for r in range(SIZE) for c in range(SIZE)]
-        empty = [x for x in empty if x is not None]
-        action_idx = np.random.choice(np.arange(len(empty)))
+        next_states = self.__get_possible_states__()
+        action_idx = np.random.choice(np.arange(len(next_states)))
         
-        action = empty[action_idx]
-        
-        return self.move(action)
+        return next_states[action_idx]
     
-    def move(self, action):
+    def __move__(self, action):
+        """
+        get action tuple (row, col), return next state
+        """
         r, c = action
         opponent = 3 - self.player
-        nextBoard = list(map(list, self.board))
-        nextBoard[r][c] = opponent
-        nextState = State(nextBoard, opponent)
-        return nextState
+        next_board = list(map(list, self.board))
+        next_board[r][c] = self.player
+        next_state = State(next_board, opponent)
+        return next_state
     
-    def render(self):
+    def __render__(self):
         for r in range(SIZE):
             lst = []
             for c in range(SIZE):
@@ -68,156 +72,138 @@ class State(object):
                 else:
                     lst.append('[X]')
             print(lst)
-############################################################
-    
+
+
+
+
 def UCTSearch(state):
-    v_root = Node(state)
+    root = Node(state)
     computational_budget = 1000
-    
+        
     while computational_budget:
-        simluation_num = 1
-        v_leaf = Selection(v_root)
-        while simluation_num:
-            v_last = Simulation(v_leaf)
-            R = Reward(v_root.state, v_last.state)
-            BackUp(v_root, v_last, R)
-            simluation_num -= 1
-        v_leaf.child = []
+        # select until meet leaf node
+        leaf = selection(root)
+        simulation_num = 40
+        
+        while simulation_num:
+            last = simulation(leaf)
+            backup(root, last)            
+            simulation_num -= 1
+        # below leaf node is not an actual leaf node, it's 'true leaf node's child node'
+        # so, when simulation for auxiliary leaf node is done, we should erase its child nodes and initialize its state
+        leaf.child = []
+        leaf.state.Q = 0
+        leaf.state.N = 0
         computational_budget -= 1
-      
-    for ch in v_root.child:
-        for r in range(SIZE):
-            for c in range(SIZE):
-                if ch.state.board[r][c] != v_root.state.board[r][c]:
-                    print(r, c, 'W:', ch.state.W, 'N:', ch.state.N)
-    
-    return optimalAction(v_root)
 
-def Selection(node):
-    v = node
-    s = v.state
-    while not is_terminate(s):
-        if s.N > EXPAND_NUM-1:
-            v = BestChild(v)
-            s = v.state
+    return optimal_action(root)
+
+        
+def selection(node):
+    state = node.state
+    while not is_done(state):
+        # if node is upper bound for expand threshold, just choose best child
+        if state.N > EXPAND_NUM-1:
+            node = best_child(node)
+            state = node.state
+        # else expand leaf node
         else:
-            if v.child == []:
-                Expand(v)
-            v = BestChild(v)
+            if len(node.child)==0:
+                expand(node)
+            node = best_child(node)
             break
-                
-    return v
 
-def Expand(node):
-    v = node
-    s = v.state
-    for next_s in s.getPossibleStates():
-        v.add(Node(next_s, v))
+    return node
 
-def Simulation(node):
+def expand(node):
+    state = node.state
+    next_states = state.__get_possible_states__()
+    for next_state in next_states:
+        node.add(Node(next_state, node))
+
+def best_child(node, c_puct=2.4):
     """
-    Select leaf node
+    choose max-value child
     """
-    v = node
-    s = v.state
-    while not is_terminate(s):
-        next_s = s.randomPlay()
-        next_v = Node(next_s, v)
-        v = next_v
-        s = next_s
-        
-    return v
+    state = node.state
+    curr_n = state.N
+    max_value = -1000
+    max_child = None
 
-def BackUp(root_node, last_node, reward):
-    v = last_node
-    cur_player = root_node.state.player
-
-    while v is not None:
-        s = v.state
-        s.N += 1
-        # Compute reward
-        if cur_player == s.player:
-            s.W += reward
-        else:
-            s.W += (1 - reward)
-        v = v.parent
-        
-def BestChild(node, c_puct=2.4):
-    v = node
-    s = v.state
-    v_n = s.N
-    max_value = -100
-    argmax_v = None
-
-    for c in v.child:
-        ch_w = c.state.W
-        ch_n = c.state.N
-        
+    for child in node.child:
+        ch_w = child.state.W
+        ch_n = child.state.N
         ch_q = ch_w / (ch_n + 1)
-        ch_u = sqrt(2 * log(v_n + 1) / (1 + ch_n))
+        ch_u = sqrt(2 * log(curr_n + 1) / (ch_n + 1))
         
-        value = ch_q + c_puct * ch_u
-        #print('value:%f root_visit:%d'%(value,v_n))
+        action_value = ch_q + c_puct*ch_u
+        if max_value < action_value:
+            max_value = action_value
+            max_child = child
+    return max_child
+        
+def simulation(node):
+    """
+    rollout until done and return the terminal node
+    """
+    state = node.state
+    while not is_done(state):
+        next_state = state.__rollout__()
+        next_node = Node(next_state, parent=node)
+        
+        state = next_state
+        node = next_node
+    
+    # print("simulation: ")
+    # node.state.__render__()
+    return node
 
-        
-        if max_value < value:
-            max_value = value
-            argmax_v = c
-            max_N = ch_n
-        
-    
-    return argmax_v
+def backup(root, curr):
+    state = curr.state
+    root_player = root.state.player
+    curr_player = curr.state.player
+    # print('root_player: ', root_player, 'curr_player: ', curr_player)
+    reward = 1
+    is_curr_win = check_bingo(state, curr_player)
+    is_curr_lose = check_bingo(state, 3-curr_player)
+    is_draw = False
 
-def Reward(root_state, leaf_state):    
-    player = root_state.player
-    opponent = 3 - player
-    
-    is_player_win = checkBingo(leaf_state, player)
-    is_opponent_win = checkBingo(leaf_state, opponent)
-    
-    if is_player_win == True:
-        if player == leaf_state.player:
-            reward = 1
-        else:
+    # print('is_curr_win:', is_curr_win, 'is_draw', is_draw)
+    if is_curr_win:
             reward = 0
-            
-    elif checkBingo(leaf_state, opponent) == True:
-        if player == leaf_state.player:
-            reward = 1
+    if is_curr_win==is_curr_lose:
+        is_draw = True
+    
+    while curr is not None:
+        state = curr.state
+        state.N += 1
+        if is_draw:
+            state.W += 0
         else:
-            reward = 0
-            
-    else:
-        reward = 0
-        
-    #print('root_player',player,end=' ')
-    #print('leaf_player',leaf_state.player, end=' ')
-    #print(is_player_win, is_opponent_win, reward)
-        
-    return reward
-
-
-def is_terminate(state):
-    s = state
-    player = s.player
-    opponent = 3 - player
+            state.W += reward
+            reward = 1 - reward
+        curr = curr.parent
+                
     
-    if checkBingo(s, player):
+def is_done(state):
+    """
+    terminate when there is bingo or no possible next state
+    """
+    if check_bingo(state, 1):
         return True
-    elif checkBingo(s, opponent):
+    elif check_bingo(state, 2):
         return True
     
-    cnt = 0
-    for r in range(SIZE):
-        for c in range(SIZE):
-            if s.board[r][c] != 0:
-                cnt += 1
-    if cnt == SIZE*SIZE:
+    next_states = state.__get_possible_states__()
+    if len(next_states) == 0:
         return True
     
     return False
 
-def checkBingo(state, player):
+def check_bingo(state, player):
+    """
+    return true if current state's board has the input player's bingo
+    """
     board = state.board
     
     for r in range(SIZE):
@@ -256,14 +242,12 @@ def checkBingo(state, player):
                 if board[r+i][SIZE-c-1-i] != player:
                     flag = False
             if flag:
-                return True
-    
+                return True    
     return False
 
-def optimalAction(node):
-    v = node
-    board = v.state.board
-    opt_board = BestChild(v, 0).state.board
+def optimal_action(node):
+    board = node.state.board
+    opt_board = best_child(node, 0).state.board
     for r in range(SIZE):
         for c in range(SIZE):
             if board[r][c] != opt_board[r][c]:
@@ -272,44 +256,14 @@ def optimalAction(node):
 
 def main():
     board = [[0 for _ in range(SIZE)] for _ in range(SIZE)]
-    s = State(board, 1)
-    while not is_terminate(s):
-        player = s.player
-        a = UCTSearch(s)
-        r, c = a
-        board[r][c] = player
-        s.render()
+    state = State(board, 1)
+    while not is_done(state):
+        opt_action = UCTSearch(state)
+        r, c = opt_action
+        board[r][c] = state.player
+        state.__render__()
         print()
-        s = State(board, 3 - player)
-        
+        state = State(board, 3 - state.player)
+    
 if __name__=="__main__":
     main()
-    
-
-    
-    """
-     
-    ### Test Case 1
-    board = [[1,1,1,2], [0,0,0,0], [0,0,0,0], [0,0,0,0]]
-    print(checkBingo(State(board, 1), 1))
-    
-    ### Test Case 2
-    board = [[2,1,1,2], [0,0,0,0], [0,0,0,0], [0,0,0,0]]
-    print(checkBingo(State(board, 1), 1))
-    
-    ### Test Case 3
-    board = [[1,1,1,2], [0,0,0,0], [0,0,0,0], [0,0,0,0]]
-    print(checkBingo(State(board, 1), 1))
-    
-    ### Test Case 4
-    board = [[1,1,1,2], [0,1,0,0], [0,0,1,0], [0,0,0,0]]
-    print(checkBingo(State(board, 1), 1))
-    
-    ### Test Case 5
-    board = [[1,0,1,2], [0,1,0,0], [0,0,1,0], [0,0,0,1]]
-    print(checkBingo(State(board, 1), 1))
-    
-    ### Test Case 6
-    board = [[1,2,2,2], [1,0,0,0], [0,0,0,0], [0,0,0,0]]
-    print(checkBingo(State(board, 1), 1))
-    """
